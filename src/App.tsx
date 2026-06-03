@@ -3,9 +3,9 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
 import { 
-  TrendingUp, TrendingDown, Wallet, Briefcase, Info, ChevronRight, Play
+  ChevronRight, Play
 } from 'lucide-react';
-import type { Stock, GameState, PortfolioItem } from './types';
+import type { GameState } from './types';
 import { 
   STOCKS, INITIAL_CASH, simulateNextTurn, buyStock, sellStock, takeLoan, repayLoan
 } from './logic/engine';
