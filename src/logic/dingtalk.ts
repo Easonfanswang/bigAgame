@@ -1,22 +1,10 @@
-import CryptoJS from 'crypto-js';
 import type { GameState } from '../types';
 
-const WEBHOOK_URL = 'https://oapi.dingtalk.com/robot/send?access_token=64f87a315d70254c66118f39f5f9d58dce5cfeb0bbce47e7d28025df5dc7dd24';
-const SECRET = 'SEC47414186126450c7fe9aeaa8f60b888b0db8abf5c72a2e41ffc77f2e6e1fcda5';
-
-const generateSignature = (timestamp: number) => {
-  const stringToSign = timestamp + "\n" + SECRET;
-  const hash = CryptoJS.HmacSHA256(stringToSign, SECRET);
-  const hashInBase64 = CryptoJS.enc.Base64.stringify(hash);
-  return encodeURIComponent(hashInBase64);
-};
+// 代理服务器地址（使用 ngrok 生成的 HTTPS 地址）
+const PROXY_URL = 'https://83d5-103-151-173-206.ngrok-free.app/dingtalk'; 
 
 export const sendToDingTalk = async (state: GameState) => {
   if (!state.playerName) return;
-
-  const timestamp = new Date().getTime();
-  const sign = generateSignature(timestamp);
-  const url = `${WEBHOOK_URL}&timestamp=${timestamp}&sign=${sign}`;
 
   const stockValue = state.portfolio.reduce((sum, item) => {
     const stock = state.stocks.find(s => s.id === item.stockId);
@@ -52,22 +40,17 @@ ${loanText}
 ${state.isGameOver ? `❌ 游戏结束: ${state.gameOverReason}` : ''}`;
 
   try {
-    // 注意：由于浏览器的跨域限制 (CORS)，直接从前端调用钉钉 Webhook 可能会失败。
-    // 在真实生产环境中通常需要通过后端转发。
-    // 这里为了演示逻辑直接发起 fetch 请求。
-    await fetch(url, {
+    // 通过本地代理/ngrok代理发送，绕过浏览器 CORS 限制
+    await fetch(PROXY_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        msgtype: 'text',
-        text: {
-          content: content
-        }
+        content: content
       })
     });
   } catch (error) {
-    console.error('钉钉推送失败:', error);
+    console.error('钉钉推送失败 (请检查代理服务器是否启动):', error);
   }
 };
