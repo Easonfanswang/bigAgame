@@ -13,19 +13,39 @@ import { sendToDingTalk } from './logic/dingtalk';
 import './index.css';
 
 const App: React.FC = () => {
-  const [gameState, setGameState] = useState<GameState>({
-    playerName: '',
-    cash: INITIAL_CASH,
-    stocks: STOCKS,
-    portfolio: [],
-    currentTurn: 1,
-    activeEvents: [],
-    history: [{ turn: 1, totalValue: INITIAL_CASH }],
-    isGameOver: false,
+  const [gameState, setGameState] = useState<GameState>(() => {
+    const savedState = localStorage.getItem('bigAgame_save');
+    if (savedState) {
+      try {
+        return JSON.parse(savedState);
+      } catch (e) {
+        console.error('Failed to load save:', e);
+      }
+    }
+    return {
+      playerName: '',
+      cash: INITIAL_CASH,
+      stocks: STOCKS,
+      portfolio: [],
+      currentTurn: 1,
+      activeEvents: [],
+      history: [{ turn: 1, totalValue: INITIAL_CASH }],
+      isGameOver: false,
+    };
   });
 
   const [tempPlayerName, setTempPlayerName] = useState('');
-  const [isGameStarted, setIsGameStarted] = useState(false);
+  const [isGameStarted, setIsGameStarted] = useState(() => {
+    return localStorage.getItem('bigAgame_started') === 'true';
+  });
+
+  // 自动保存逻辑
+  useEffect(() => {
+    if (isGameStarted) {
+      localStorage.setItem('bigAgame_save', JSON.stringify(gameState));
+      localStorage.setItem('bigAgame_started', 'true');
+    }
+  }, [gameState, isGameStarted]);
   const [selectedStockId, setSelectedStockId] = useState<string>(STOCKS[0].id);
   const [activeTab, setActiveTab] = useState<'market' | 'portfolio' | 'loan'>('market');
   const [isBuyModalOpen, setIsBuyModalOpen] = useState(false);
@@ -66,10 +86,10 @@ const App: React.FC = () => {
      };
    }, [isGameStarted, gameState.isGameOver]);
 
-   const selectedStock = useMemo(() => 
-     gameState.stocks.find(s => s.id === selectedStockId)!,
-     [gameState.stocks, selectedStockId]
-   );
+   const selectedStock = useMemo(() => {
+     const stock = gameState.stocks.find(s => s.id === selectedStockId);
+     return stock || gameState.stocks[0]; // 回退到第一只股票以防万一
+   }, [gameState.stocks, selectedStockId]);
 
    const totalStockValue = useMemo(() => {
      return gameState.portfolio.reduce((sum, item) => {
@@ -99,31 +119,39 @@ const App: React.FC = () => {
    };
 
    const handleStartGame = () => {
-     setGameState(prev => ({ ...prev, playerName: tempPlayerName.trim() || undefined }));
-     setIsGameStarted(true);
-   };
+    setGameState(prev => ({ ...prev, playerName: tempPlayerName.trim() || undefined }));
+    setIsGameStarted(true);
+  };
+
+  const handleResetGame = () => {
+    if (window.confirm('确定要清除所有存档重新开始吗？')) {
+      setIsGameStarted(false);
+      localStorage.clear();
+      window.location.reload();
+    }
+  };
 
    const confirmBuy = () => {
     const quantity = buyLots * 100;
-    setGameState(prev => {
-      const newState = buyStock(prev, selectedStockId, quantity);
-      if (newState.cash !== prev.cash) {
-        showToast(`成功买入 ${selectedStock.name} ${quantity} 股`);
-        setIsBuyModalOpen(false);
-      }
-      return newState;
-    });
+    const newState = buyStock(gameState, selectedStockId, quantity);
+    if (newState.cash !== gameState.cash) {
+      setGameState(newState);
+      showToast(`成功买入 ${selectedStock.name} ${quantity} 股`);
+      setIsBuyModalOpen(false);
+    } else {
+      showToast('资金不足或购买失败');
+    }
   };
 
   const confirmSell = () => {
-    setGameState(prev => {
-      const newState = sellStock(prev, selectedStockId, sellShares);
-      if (newState.cash !== prev.cash) {
-        showToast(`成功卖出 ${selectedStock.name} ${sellShares} 股`);
-        setIsSellModalOpen(false);
-      }
-      return newState;
-    });
+    const newState = sellStock(gameState, selectedStockId, sellShares);
+    if (newState.cash !== gameState.cash) {
+      setGameState(newState);
+      showToast(`成功卖出 ${selectedStock.name} ${sellShares} 股`);
+      setIsSellModalOpen(false);
+    } else {
+      showToast('卖出失败');
+    }
   };
 
   const handleTakeLoan = (type: 'standard' | 'high_risk') => {
@@ -135,6 +163,7 @@ const App: React.FC = () => {
   };
 
   const chartData = useMemo(() => {
+    if (!selectedStock || !selectedStock.history) return [];
     return selectedStock.history.map((price, index) => ({
       name: `T-${selectedStock.history.length - index}`,
       price,
@@ -256,7 +285,7 @@ const App: React.FC = () => {
               />
             </div>
             <button 
-              className="btn btn-primary" 
+              className="btn btn-start" 
               style={{ padding: '12px 30px', fontSize: '1.1rem', width: 'auto', minWidth: '200px' }}
               onClick={handleStartGame}
             >
@@ -313,16 +342,25 @@ const App: React.FC = () => {
               )}
               第 {gameState.currentTurn} 回合
             </p>
+            <button 
+              className="btn" 
+              onClick={handleResetGame}
+              style={{ background: 'transparent', color: '#666', fontSize: '0.7rem', padding: '2px 4px', border: '1px solid #444', marginTop: '8px' }}
+            >
+              重置存档
+            </button>
           </div>
-          <div className="header-stats">
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ opacity: 0.7, fontSize: '0.75rem' }}>可用现金</div>
-              <div style={{ fontWeight: 'bold', fontSize: '1rem' }}>¥{gameState.cash.toLocaleString()}</div>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ opacity: 0.7, fontSize: '0.75rem' }}>总资产</div>
-              <div style={{ fontWeight: 'bold', fontSize: '1rem', color: totalAssets >= INITIAL_CASH ? '#ff4d4f' : '#52c41a' }}>
-                ¥{totalAssets.toLocaleString()}
+          <div className="header-stats" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+            <div className="stats-grid">
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ opacity: 0.7, fontSize: '0.75rem' }}>可用现金</div>
+                <div style={{ fontWeight: 'bold', fontSize: '1rem' }}>¥{gameState.cash.toLocaleString()}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ opacity: 0.7, fontSize: '0.75rem' }}>总资产</div>
+                <div style={{ fontWeight: 'bold', fontSize: '1rem', color: totalAssets >= INITIAL_CASH ? '#ff4d4f' : '#52c41a' }}>
+                  ¥{totalAssets.toLocaleString()}
+                </div>
               </div>
             </div>
             <button 

@@ -38,6 +38,12 @@ body {
   gap: 1.5rem;
 }
 
+.stats-grid {
+  display: flex;
+  flex-direction: horizontal;
+  gap: 2rem;
+}
+
 @media (max-width: 768px) {
   #root {
     padding: 0.5rem;
@@ -63,7 +69,7 @@ body {
     gap: 1rem;
   }
 
-  header .flex-between {
+  .flex-between {
     width: 100%;
     justify-content: space-between;
   }
@@ -142,7 +148,8 @@ body {
   border-collapse: collapse;
 }
 
-.stock-table th, .stock-table td {
+.stock-table th,
+.stock-table td {
   padding: 12px;
   text-align: left;
   border-bottom: 1px solid #3a3a3a;
@@ -177,14 +184,18 @@ body {
     flex-wrap: wrap;
     gap: 8px;
   }
-  
+
   .trade-input-group input {
     width: 80px !important;
   }
 }
 
-.up { color: #ff4d4f; }
-.down { color: #52c41a; }
+.up {
+  color: #ff4d4f;
+}
+.down {
+  color: #52c41a;
+}
 
 .btn {
   padding: 8px 16px;
@@ -200,9 +211,27 @@ body {
   cursor: not-allowed;
 }
 
-.btn-primary { background: #1890ff; color: white; }
-.btn-success { background: #52c41a; color: white; }
-.btn-danger { background: #ff4d4f; color: white; }
+.btn-start {
+  background: #1890ff;
+  color: white;
+}
+
+.btn-primary {
+  background: #1890ff;
+  color: white;
+  margin-top: 8px;
+  margin-left: auto;
+}
+
+.btn-success {
+  background: #52c41a;
+  color: white;
+}
+
+.btn-danger {
+  background: #ff4d4f;
+  color: white;
+}
 
 .panel-title {
   margin-top: 0;
@@ -274,15 +303,27 @@ body {
   padding: 10px 20px;
   border-radius: 4px;
   z-index: 10000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   animation: fadeInOut 2s ease-in-out forwards;
 }
 
 @keyframes fadeInOut {
-  0% { opacity: 0; transform: translate(-50%, -20px); }
-  15% { opacity: 1; transform: translate(-50%, 0); }
-  85% { opacity: 1; transform: translate(-50%, 0); }
-  100% { opacity: 0; transform: translate(-50%, -20px); }
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -20px);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  85% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -20px);
+  }
 }
 
 @media (max-width: 768px) {
