@@ -7,9 +7,8 @@ import {
 } from 'lucide-react';
 import type { GameState } from './types';
 import { 
-  STOCKS, INITIAL_CASH,simulateNextTurn, buyStock, sellStock, takeLoan, repayLoan, EVENTS
+  STOCKS, INITIAL_CASH, simulateNextTurn, buyStock, sellStock, takeLoan, repayLoan, EVENTS
 } from './logic/engine';
-import { sendToDingTalk } from './logic/dingtalk';
 import './index.css';
 
 const App: React.FC = () => {
@@ -171,7 +170,6 @@ const App: React.FC = () => {
      
      const nextState = simulateNextTurn(gameState);
      setGameState(nextState);
-     sendToDingTalk(nextState);
      
      // 如果新状态中逾期回合增加，说明本回合扣款失败
      if (nextState.loan && nextState.loan.overdueTurns > wasOverdue) {
@@ -482,7 +480,7 @@ const App: React.FC = () => {
               style={{ padding: '12px 30px', fontSize: '1.1rem', width: 'auto', minWidth: '200px' }}
               onClick={handleStartGame}
             >
-              {tempPlayerName.trim() ? '开始游戏' : '匿名开始 (不启用钉钉)'}
+              {tempPlayerName.trim() ? '开始游戏' : '匿名开始'}
             </button>
           </div>
         </div>
