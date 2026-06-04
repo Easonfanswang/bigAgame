@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { GameState } from './types';
 import { 
-  STOCKS, INITIAL_CASH, simulateNextTurn, buyStock, sellStock, takeLoan, repayLoan
+  STOCKS, INITIAL_CASH,simulateNextTurn, buyStock, sellStock, takeLoan, repayLoan, EVENTS
 } from './logic/engine';
 import { sendToDingTalk } from './logic/dingtalk';
 import './index.css';
@@ -17,7 +17,12 @@ const App: React.FC = () => {
     const savedState = localStorage.getItem('bigAgame_save');
     if (savedState) {
       try {
-        return JSON.parse(savedState);
+        const parsed = JSON.parse(savedState);
+        // 兼容旧存档
+        if (!parsed.researchState) {
+          parsed.researchState = { cooldown: 0 };
+        }
+        return parsed;
       } catch (e) {
         console.error('Failed to load save:', e);
       }
@@ -30,6 +35,8 @@ const App: React.FC = () => {
       currentTurn: 1,
       activeEvents: [],
       history: [{ turn: 1, totalValue: INITIAL_CASH }],
+      turnsSinceLastEvent: 0,
+      researchState: { cooldown: 0 },
       isGameOver: false,
     };
   });
@@ -46,14 +53,70 @@ const App: React.FC = () => {
       localStorage.setItem('bigAgame_started', 'true');
     }
   }, [gameState, isGameStarted]);
+
   const [selectedStockId, setSelectedStockId] = useState<string>(STOCKS[0].id);
-  const [activeTab, setActiveTab] = useState<'market' | 'portfolio' | 'loan'>('market');
+  const [activeTab, setActiveTab] = useState<'market' | 'portfolio' | 'loan' | 'research'>('market');
+
+  // 主动调研相关状态
+  const [selectedResearchSectors, setSelectedResearchSectors] = useState<string[]>([]);
+  const [researchIntensity, setResearchIntensity] = useState<'low' | 'medium' | 'high'>('low');
+
+  const RESEARCH_INTENSITY_CONFIG = {
+    low: { label: '初级调研', costBase: 50000, delay: 5, duration: 5, cd: 10, minAssets: 1000000 },
+    medium: { label: '深度调研', costBase: 500000, delay: 3, duration: 8, cd: 20, minAssets: 5000000 },
+    high: { label: '顶级内幕', costBase: 2000000, delay: 1, duration: 12, cd: 40, minAssets: 20000000 },
+  };
+
+  const ALL_SECTORS = useMemo(() => {
+    const sectors = new Set<string>();
+    STOCKS.forEach(s => s.sector.forEach(sec => sectors.add(sec)));
+    return Array.from(sectors);
+  }, []);
   const [isBuyModalOpen, setIsBuyModalOpen] = useState(false);
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
   const [buyLots, setBuyLots] = useState<number>(1);
   const [sellShares, setSellShares] = useState<number>(100);
   const [toast, setToast] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
+
+  // 暴露调试接口到全局 window 对象
+  useEffect(() => {
+    (window as any).gameDebug = {
+      // 修改现金
+      setCash: (amount: number) => {
+        setGameState(prev => ({ ...prev, cash: amount }));
+        console.log(`✅ 现金已修改为: ¥${amount.toLocaleString()}`);
+      },
+      // 触发特定事件
+      triggerEvent: (eventId: string) => {
+        const rawEvent = EVENTS.find((e: any) => e.id === eventId);
+        if (!rawEvent) {
+          console.error(`❌ 未找到 ID 为 ${eventId} 的事件`);
+          return;
+        }
+        setGameState(prev => {
+          const event = JSON.parse(JSON.stringify(rawEvent));
+          // 处理随机股票
+          event.impacts.forEach((impact: any) => {
+            if (impact.stockId === 'RANDOM') {
+              const randomStock = prev.stocks[Math.floor(Math.random() * prev.stocks.length)];
+              impact.stockId = randomStock.id;
+              event.description = event.description.replace('某上市公司', `【${randomStock.name}】`);
+            }
+          });
+          return {
+            ...prev,
+            activeEvents: [...prev.activeEvents, { event, remainingTurns: event.duration }]
+          };
+        });
+        console.log(`✅ 已手动触发事件: ${rawEvent.title}`);
+      },
+      // 获取所有事件 ID 列表
+      listEvents: () => {
+        console.table(EVENTS.map((e: any) => ({ id: e.id, title: e.title, minAssets: e.minTotalAssets || 0 })));
+      }
+    };
+  }, []);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -102,9 +165,20 @@ const App: React.FC = () => {
 
    const handleNextTurn = () => {
      if (cooldown > 0) return;
+     
+     // 检查贷款逾期情况
+     const wasOverdue = gameState.loan ? gameState.loan.overdueTurns : 0;
+     
      const nextState = simulateNextTurn(gameState);
      setGameState(nextState);
      sendToDingTalk(nextState);
+     
+     // 如果新状态中逾期回合增加，说明本回合扣款失败
+     if (nextState.loan && nextState.loan.overdueTurns > wasOverdue) {
+       showToast(`⚠️ 警告：现金不足以偿还本回合贷款！已记为逾期 (第 ${nextState.loan.overdueTurns}/3 次)`);
+     } else if (!nextState.loan && gameState.loan) {
+       showToast('🎉 恭喜！您的贷款已全部还清。');
+     }
      
      setCooldown(5);
      const timer = setInterval(() => {
@@ -160,6 +234,105 @@ const App: React.FC = () => {
 
   const handleRepayLoan = (amount: number) => {
     setGameState(prev => repayLoan(prev, amount));
+  };
+
+  const handleStartResearch = () => {
+    if (selectedResearchSectors.length === 0) {
+      showToast('请至少选择一个板块');
+      return;
+    }
+    const config = RESEARCH_INTENSITY_CONFIG[researchIntensity];
+    const totalCost = config.costBase * selectedResearchSectors.length;
+
+    if (gameState.cash < totalCost) {
+      showToast('现金不足以启动该调研任务');
+      return;
+    }
+
+    setGameState(prev => ({
+      ...prev,
+      cash: prev.cash - totalCost,
+      researchState: {
+        ...prev.researchState,
+        activeTask: {
+          sectors: selectedResearchSectors,
+          intensity: researchIntensity,
+          remainingTurnsToResult: config.delay,
+          remainingTurnsOfImpact: config.duration
+        },
+        cooldown: config.cd
+      }
+    }));
+
+    showToast(`调研任务已启动！预计 ${config.delay} 回合后返回结果`);
+    setSelectedResearchSectors([]);
+  };
+
+  const handleDiscountBuy = (eventId: string) => {
+    const ae = gameState.activeEvents.find(e => e.event.id === eventId);
+    if (!ae || !ae.discountData || ae.discountData.availableShares <= 0) return;
+
+    const { stockId, price, availableShares } = ae.discountData;
+    const stock = gameState.stocks.find(s => s.id === stockId)!;
+    
+    // 默认买入全部可用份额，如果现金不足则按最大现金买入
+    const maxAffordable = Math.floor(gameState.cash / price / 100) * 100;
+    const buyQuantity = Math.min(availableShares, maxAffordable);
+
+    if (buyQuantity < 100) {
+      showToast('可用现金不足以买入最小单位(1手)');
+      return;
+    }
+
+    const totalCost = buyQuantity * price;
+
+    setGameState(prev => {
+      // 1. 扣除现金并增加持仓
+      const newPortfolio = [...prev.portfolio];
+      const portfolioIndex = newPortfolio.findIndex(p => p.stockId === stockId);
+      
+      if (portfolioIndex >= 0) {
+        const item = newPortfolio[portfolioIndex];
+        const newTotalShares = item.quantity + buyQuantity;
+        const newAvgCost = (item.quantity * item.averageCost + totalCost) / newTotalShares;
+        newPortfolio[portfolioIndex] = {
+          ...item,
+          quantity: newTotalShares,
+          availableQuantity: item.availableQuantity + buyQuantity, // 折价买入立即生效
+          averageCost: newAvgCost
+        };
+      } else {
+        newPortfolio.push({
+          stockId,
+          quantity: buyQuantity,
+          availableQuantity: buyQuantity,
+          averageCost: price
+        });
+      }
+
+      // 2. 更新事件中的剩余份额
+      const newActiveEvents = prev.activeEvents.map(e => {
+        if (e.event.id === eventId && e.discountData) {
+          return {
+            ...e,
+            discountData: {
+              ...e.discountData,
+              availableShares: e.discountData.availableShares - buyQuantity
+            }
+          };
+        }
+        return e;
+      });
+
+      return {
+        ...prev,
+        cash: prev.cash - totalCost,
+        portfolio: newPortfolio,
+        activeEvents: newActiveEvents
+      };
+    });
+
+    showToast(`以折价 ¥${price} 成功吸纳 ${stock.name} ${buyQuantity} 股`);
   };
 
   const chartData = useMemo(() => {
@@ -237,6 +410,10 @@ const App: React.FC = () => {
                 const available = gameState.portfolio.find(p => p.stockId === selectedStockId)?.availableQuantity || 0;
                 setSellShares(prev => Math.min(available, prev + 10));
               }}>+10股</button>
+              <button className="btn-small" style={{ padding: '10px 15px', background: '#444' }} onClick={() => {
+                const available = gameState.portfolio.find(p => p.stockId === selectedStockId)?.availableQuantity || 0;
+                setSellShares(available);
+              }}>全仓</button>
             </div>
 
             <div style={{ width: '100%', textAlign: 'left', marginBottom: '1rem', fontSize: '0.9rem' }}>
@@ -310,6 +487,11 @@ const App: React.FC = () => {
                   currentTurn: 1,
                   activeEvents: [],
                   history: [{ turn: 1, totalValue: INITIAL_CASH }],
+                  turnsSinceLastEvent: 0,
+                  researchState: {
+                    activeTask: null,
+                    cooldown: 0,
+                  },  
                   isGameOver: false,
                 });
               }}>重新开始</button>
@@ -323,6 +505,11 @@ const App: React.FC = () => {
                   currentTurn: 1,
                   activeEvents: [],
                   history: [{ turn: 1, totalValue: INITIAL_CASH }],
+                  turnsSinceLastEvent: 0,
+                  researchState: {
+                    activeTask: null,
+                    cooldown: 0,
+                  },  
                   isGameOver: false,
                 });
               }}>换个名字</button>
@@ -396,6 +583,12 @@ const App: React.FC = () => {
                 onClick={() => setActiveTab('loan')}
               >
                 银行贷款
+              </div>
+              <div 
+                className={`tab ${activeTab === 'research' ? 'active' : ''}`} 
+                onClick={() => setActiveTab('research')}
+              >
+                主动调研
               </div>
             </div>
 
@@ -563,7 +756,7 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
-            ) : (
+            ) : activeTab === 'loan' ? (
               <div style={{ padding: '1rem' }}>
                 {!gameState.loan ? (
                   <div className="loan-grid">
@@ -624,6 +817,132 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
+            ) : (
+              <div className="card" style={{ padding: '1rem' }}>
+                <h3 className="panel-title">主动调研</h3>
+                
+                {gameState.researchState.activeTask ? (
+                  <div className="card" style={{ background: '#1a2a3a', border: '1px solid #1890ff', marginBottom: '1rem' }}>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#1890ff' }}>
+                      {gameState.researchState.activeTask.remainingTurnsToResult > 0 ? '🕒 调研进行中...' : '✅ 调研结果已送达'}
+                    </h4>
+                    <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>
+                      <p>目标板块: {gameState.researchState.activeTask.sectors.join(', ')}</p>
+                      <p>调研力度: {RESEARCH_INTENSITY_CONFIG[gameState.researchState.activeTask.intensity].label}</p>
+                      {gameState.researchState.activeTask.remainingTurnsToResult > 0 ? (
+                        <p>预计返回: 还需 {gameState.researchState.activeTask.remainingTurnsToResult} 回合</p>
+                      ) : (
+                        <p>影响持续: 剩余 {gameState.researchState.activeTask.remainingTurnsOfImpact} 回合</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ marginBottom: '1.5rem' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', opacity: 0.7 }}>选择调研板块 (最多3个):</label>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {ALL_SECTORS.map(sector => {
+                          const isSelected = selectedResearchSectors.includes(sector);
+                          return (
+                            <button
+                              key={sector}
+                              className={`btn-small ${isSelected ? 'active' : ''}`}
+                              style={{ 
+                                background: isSelected ? '#1890ff' : '#333',
+                                border: isSelected ? '1px solid #1890ff' : '1px solid #444'
+                              }}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setSelectedResearchSectors(prev => prev.filter(s => s !== sector));
+                                } else if (selectedResearchSectors.length < 3) {
+                                  setSelectedResearchSectors(prev => [...prev, sector]);
+                                }
+                              }}
+                            >
+                              {sector}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '1.5rem' }}>
+                      <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', opacity: 0.7 }}>选择调查力度:</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                        {(Object.keys(RESEARCH_INTENSITY_CONFIG) as Array<'low' | 'medium' | 'high'>).map(key => {
+                          const config = RESEARCH_INTENSITY_CONFIG[key];
+                          const isSelected = researchIntensity === key;
+                          const isLocked = totalAssets < config.minAssets;
+                          return (
+                            <button
+                              key={key}
+                              className="btn-small"
+                              disabled={isLocked}
+                              style={{ 
+                                background: isSelected ? '#1890ff' : '#333',
+                                border: isSelected ? '1px solid #1890ff' : '1px solid #444',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                padding: '10px',
+                                gap: '5px',
+                                opacity: isLocked ? 0.4 : 1,
+                                cursor: isLocked ? 'not-allowed' : 'pointer',
+                                position: 'relative'
+                              }}
+                              onClick={() => setResearchIntensity(key)}
+                            >
+                              <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                {config.label} {isLocked && '🔒'}
+                              </span>
+                              <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>基础: ¥{config.costBase.toLocaleString()}</span>
+                              {isLocked && (
+                                <span style={{ fontSize: '0.65rem', color: '#ff4d4f' }}>需{config.minAssets / 10000}万资产</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="card" style={{ background: '#222', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+                      <div className="flex-between" style={{ marginBottom: '5px' }}>
+                        <span>总费用:</span>
+                        <span style={{ fontWeight: 'bold', color: '#ff4d4f' }}>
+                          ¥{(RESEARCH_INTENSITY_CONFIG[researchIntensity].costBase * selectedResearchSectors.length).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex-between" style={{ marginBottom: '5px' }}>
+                        <span>结果返回:</span>
+                        <span>{RESEARCH_INTENSITY_CONFIG[researchIntensity].delay} 回合</span>
+                      </div>
+                      <div className="flex-between">
+                        <span>冷却时间:</span>
+                        <span>{RESEARCH_INTENSITY_CONFIG[researchIntensity].cd} 回合</span>
+                      </div>
+                    </div>
+
+                    <button 
+                      className="btn btn-primary" 
+                      style={{ width: '100%' }}
+                      disabled={
+                        gameState.researchState.cooldown > 0 || 
+                        selectedResearchSectors.length === 0 || 
+                        totalAssets < RESEARCH_INTENSITY_CONFIG[researchIntensity].minAssets ||
+                        gameState.cash < (RESEARCH_INTENSITY_CONFIG[researchIntensity].costBase * selectedResearchSectors.length)
+                      }
+                      onClick={handleStartResearch}
+                    >
+                      {gameState.researchState.cooldown > 0 
+                        ? `冷却中 (${gameState.researchState.cooldown}回合)` 
+                        : selectedResearchSectors.length === 0 
+                          ? '请选择板块' 
+                          : gameState.cash < (RESEARCH_INTENSITY_CONFIG[researchIntensity].costBase * selectedResearchSectors.length)
+                            ? '现金不足'
+                            : '启动调研'}
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         </section>
@@ -631,6 +950,10 @@ const App: React.FC = () => {
         <aside style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           <div className="card">
             <h3 className="panel-title">个股详情: {selectedStock.name}</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '10px', opacity: 0.8 }}>
+              <span>总股本: {selectedStock.totalShares.toLocaleString()} 股</span>
+              <span>当前持股: {((gameState.portfolio.find(p => p.stockId === selectedStockId)?.quantity || 0) / selectedStock.totalShares * 100).toFixed(2)}%</span>
+            </div>
             <div style={{ height: '200px', marginBottom: '1rem' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
@@ -681,19 +1004,85 @@ const App: React.FC = () => {
 
           <div className="card">
             <h3 className="panel-title">实时资讯</h3>
-            {gameState.activeEvents.length === 0 ? (
-              <p style={{ opacity: 0.5, fontSize: '0.9rem' }}>暂无重大市场资讯</p>
-            ) : (
-              gameState.activeEvents.map(ae => (
-                <div key={ae.event.id} className="event-card">
-                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>{ae.event.title}</div>
-                  <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>{ae.event.description}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#faad14', marginTop: '4px' }}>
-                    影响中... 剩余 {ae.remainingTurns} 回合
+            {(() => {
+              const visibleEvents = gameState.activeEvents.filter(ae => {
+                // 如果没有任何要求，直接显示
+                if (!ae.event.minHoldingPercentage && !ae.event.minTotalAssets) return true;
+                
+                // 1. 检查资产要求
+                if (ae.event.minTotalAssets && totalAssets >= ae.event.minTotalAssets) return true;
+
+                // 2. 检查持股比例要求
+                if (ae.event.minHoldingPercentage) {
+                  return ae.event.impacts.some(impact => {
+                    if (impact.stockId) {
+                      const stock = gameState.stocks.find(s => s.id === impact.stockId);
+                      const portfolio = gameState.portfolio.find(p => p.stockId === impact.stockId);
+                      if (stock && portfolio) {
+                        const percentage = (portfolio.quantity / stock.totalShares) * 100;
+                        return percentage >= ae.event.minHoldingPercentage!;
+                      }
+                    }
+                    return false;
+                  });
+                }
+                
+                return false;
+              });
+
+              if (visibleEvents.length === 0) {
+                return <p style={{ opacity: 0.5, fontSize: '0.9rem' }}>暂无重大市场资讯</p>;
+              }
+
+              return visibleEvents.map(ae => {
+                const isPrivate = ae.event.minHoldingPercentage || ae.event.minTotalAssets;
+                const tagLabel = ae.event.minHoldingPercentage ? '大股东资讯' : (ae.event.minTotalAssets ? '高端资讯' : '');
+                const tagColor = ae.event.minHoldingPercentage ? '#1890ff' : '#9254de'; // 紫色代表高端资讯
+
+                return (
+                  <div key={ae.event.id} className="event-card" style={{ 
+                    background: isPrivate ? (ae.event.minHoldingPercentage ? '#1a2a3a' : '#2a1a3a') : '#3a2a1a',
+                    borderLeft: `4px solid ${isPrivate ? tagColor : '#faad14'}`
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <div style={{ fontWeight: 'bold' }}>
+                        {isPrivate && <span style={{ fontSize: '0.7rem', background: tagColor, color: 'white', padding: '1px 4px', borderRadius: '2px', marginRight: '5px' }}>{tagLabel}</span>}
+                        {ae.event.title}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>{ae.event.description}</div>
+                    
+                    {ae.discountData && ae.discountData.availableShares > 0 && (
+                      <div style={{ 
+                        marginTop: '10px', 
+                        padding: '10px', 
+                        background: 'rgba(255,255,255,0.05)', 
+                        borderRadius: '4px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}>
+                        <div style={{ fontSize: '0.8rem' }}>
+                          <div style={{ opacity: 0.6 }}>剩余可吸纳份额</div>
+                          <div style={{ fontWeight: 'bold' }}>{ae.discountData.availableShares.toLocaleString()} 股</div>
+                        </div>
+                        <button 
+                          className="btn-small" 
+                          style={{ background: tagColor, padding: '6px 12px' }}
+                          onClick={() => handleDiscountBuy(ae.event.id)}
+                        >
+                          立即折价买入
+                        </button>
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: '0.75rem', color: isPrivate ? tagColor : '#faad14', marginTop: '4px' }}>
+                      影响中... 剩余 {ae.remainingTurns} 回合
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                );
+              });
+            })()}
           </div>
         </aside>
       </main>
