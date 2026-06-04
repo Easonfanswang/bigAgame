@@ -20,7 +20,7 @@ const App: React.FC = () => {
         const parsed = JSON.parse(savedState);
         // 兼容旧存档
         if (!parsed.researchState) {
-          parsed.researchState = { cooldown: 0 };
+          parsed.researchState = { activeTask: undefined, cooldown: 0 };
         }
         return parsed;
       } catch (e) {
@@ -36,7 +36,7 @@ const App: React.FC = () => {
       activeEvents: [],
       history: [{ turn: 1, totalValue: INITIAL_CASH }],
       turnsSinceLastEvent: 0,
-      researchState: { cooldown: 0 },
+      researchState: { activeTask: undefined, cooldown: 0 },
       isGameOver: false,
     };
   });
@@ -209,24 +209,36 @@ const App: React.FC = () => {
     const quantity = buyLots * 100;
     const newState = buyStock(gameState, selectedStockId, quantity);
     if (newState.cash !== gameState.cash) {
-      setGameState(newState);
-      showToast(`成功买入 ${selectedStock.name} ${quantity} 股`);
-      setIsBuyModalOpen(false);
-    } else {
-      showToast('资金不足或购买失败');
-    }
-  };
-
-  const confirmSell = () => {
-    const newState = sellStock(gameState, selectedStockId, sellShares);
-    if (newState.cash !== gameState.cash) {
-      setGameState(newState);
-      showToast(`成功卖出 ${selectedStock.name} ${sellShares} 股`);
-      setIsSellModalOpen(false);
-    } else {
-      showToast('卖出失败');
-    }
-  };
+        setGameState({
+          ...newState,
+          researchState: {
+            ...newState.researchState,
+            activeTask: newState.researchState.activeTask || undefined
+          }
+        });
+        showToast(`成功买入 ${selectedStock.name} ${quantity} 股`);
+        setIsBuyModalOpen(false);
+      } else {
+        showToast('资金不足或购买失败');
+      }
+    };
+  
+    const confirmSell = () => {
+      const newState = sellStock(gameState, selectedStockId, sellShares);
+      if (newState.cash !== gameState.cash) {
+        setGameState({
+          ...newState,
+          researchState: {
+            ...newState.researchState,
+            activeTask: newState.researchState.activeTask || undefined
+          }
+        });
+        showToast(`成功卖出 ${selectedStock.name} ${sellShares} 股`);
+        setIsSellModalOpen(false);
+      } else {
+        showToast('卖出失败');
+      }
+    };
 
   const handleTakeLoan = (type: 'standard' | 'high_risk') => {
     setGameState(prev => takeLoan(prev, type));
@@ -328,7 +340,11 @@ const App: React.FC = () => {
         ...prev,
         cash: prev.cash - totalCost,
         portfolio: newPortfolio,
-        activeEvents: newActiveEvents
+        activeEvents: newActiveEvents,
+        researchState: {
+          ...prev.researchState,
+          activeTask: prev.researchState.activeTask || undefined
+        }
       };
     });
 
@@ -489,7 +505,7 @@ const App: React.FC = () => {
                   history: [{ turn: 1, totalValue: INITIAL_CASH }],
                   turnsSinceLastEvent: 0,
                   researchState: {
-                    activeTask: null,
+                    activeTask: undefined,
                     cooldown: 0,
                   },  
                   isGameOver: false,
@@ -507,7 +523,7 @@ const App: React.FC = () => {
                   history: [{ turn: 1, totalValue: INITIAL_CASH }],
                   turnsSinceLastEvent: 0,
                   researchState: {
-                    activeTask: null,
+                    activeTask: undefined,
                     cooldown: 0,
                   },  
                   isGameOver: false,
